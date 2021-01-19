@@ -38,8 +38,13 @@ Module {
     condition: false
 
     property bool enableCodeSigning: false
+    property bool enablePackageSigning: false
 
     property string codesignName
     property string codesignPath: codesignName
     property stringList codesignFlags
+    property string keystorePath
+    property string keystorePassword
+    property string keyPassword
+    property string keyAlias
 }

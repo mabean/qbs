@@ -265,3 +265,14 @@
 
     \defaultvalue \c platformVersion
 */
+
+/*!
+    \qmlproperty bool Android.sdk::enablePackageSigning
+
+    If \c true, the apk or aab package is signed using properties of the
+    codesign package. Set this property to \c false to disable signing.
+    Beware that if signing is disable then the application won't even
+    be signed with the default debug key and won't run on the target.
+
+    \defaultvalue \c true
+*/
