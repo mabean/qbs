@@ -84,10 +84,45 @@ static std::vector<MSBuildFilter *> defaultItemGroupFilters(IMSBuildItemGroup *p
     };
 }
 
+bool filtersHas(std::vector<MSBuildFilter *> const& filters, QString name)
+{
+    for (const auto& filter: filters)
+        if (filter->include() == name)
+            return true;
+
+    return false;
+}
+
+MSBuildFilter * findFilter(std::vector<MSBuildFilter *> const& filters, QString name)
+{
+    for (const auto& filter: filters)
+        if (filter->include() == name)
+            return filter;
+
+    return nullptr;
+}
+
+
 static bool matchesFilter(const MSBuildFilter *filter, const QString &filePath)
 {
     return filter->extensions().contains(QFileInfo(filePath).completeSuffix());
 }
+
+MSBuildFilter * createItemGroupFilter(QString name, IMSBuildItemGroup *parent = nullptr)
+{
+    return new MSBuildFilter(name, sourceFileExtensions() + headerFileExtensions(), parent);
+}
+
+bool isHeaderFile(QString filePath)
+{
+    return headerFileExtensions().contains(QFileInfo(filePath).completeSuffix());
+}
+
+bool isSourceFile(QString filePath)
+{
+    return sourceFileExtensions().contains(QFileInfo(filePath).completeSuffix());
+}
+
 
 MSBuildFiltersProject::MSBuildFiltersProject(const GeneratableProductData &product,
                                              QObject *parent)
@@ -98,56 +133,100 @@ MSBuildFiltersProject::MSBuildFiltersProject(const GeneratableProductData &produ
     setToolsVersion(QStringLiteral("4.0"));
 
     const auto itemGroup = new MSBuildItemGroup(this);
-    const auto filterOptions = defaultItemGroupFilters();
-    for (const auto options : filterOptions) {
+    const auto defaultFilterOptions = defaultItemGroupFilters();
+
+    auto headerFilesGroup = new MSBuildItemGroup(this);
+    auto sourceFilesGroup = new MSBuildItemGroup(this);
+    auto filesGroup = new MSBuildItemGroup(this);
+
+    std::vector<MSBuildFilter *> actualFilterOptions;
+    std::vector<MSBuildFilter *> customFilterOptions;
+
+    const auto productDatas = product.data.values();
+    for (const auto &productData : productDatas) {
+        auto productName = productData.name();
+
+        for (const auto &groupData : productData.groups())
+            if (groupData.isEnabled()) {
+
+                auto groupName = groupData.name();
+
+                MSBuildFilter *customFilter = nullptr;
+
+                if (groupName != productName) {
+                    if (auto filter = findFilter(customFilterOptions, groupName)) {
+                        customFilter = filter;
+                    } else {
+                        customFilter = createItemGroupFilter(groupName);
+                        customFilterOptions.push_back(customFilter);
+                    }
+                }
+
+                for (const auto& filePath: groupData.allFilePaths())
+                {
+                    MSBuildFileItem *fileItem = nullptr;
+
+                    if (customFilter) {
+
+                        if (isHeaderFile(filePath)) {
+                            fileItem = new MSBuildClInclude(headerFilesGroup);
+                        } else if (isSourceFile(filePath)) {
+                            fileItem = new MSBuildClCompile(sourceFilesGroup);
+                        }
+
+                        if (!filtersHas(actualFilterOptions, customFilter->include()))
+                            actualFilterOptions.push_back(customFilter);
+
+                        if (fileItem) {
+                            fileItem->setFilterName(groupName);
+                        }
+                    }
+
+
+                    if (!fileItem)
+                    {
+                        for (const auto options : defaultFilterOptions) {
+                            if (matchesFilter(options, filePath)) {
+
+                                if (options->include() == QStringLiteral("Header Files")) {
+                                    if (!headerFilesGroup)
+                                        headerFilesGroup = new MSBuildItemGroup(this);
+                                    fileItem = new MSBuildClInclude(headerFilesGroup);
+                                } else if (options->include() == QStringLiteral("Source Files")) {
+                                    if (!sourceFilesGroup)
+                                        sourceFilesGroup = new MSBuildItemGroup(this);
+                                    fileItem = new MSBuildClCompile(sourceFilesGroup);
+                                }
+
+                                if (!filtersHas(actualFilterOptions, options->include()))
+                                    actualFilterOptions.push_back(options);
+
+                                if (fileItem) {
+                                    fileItem->setFilterName(options->include());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!fileItem) {
+                        fileItem = new MSBuildNone(filesGroup);
+                    }
+
+                    fileItem->setFilePath(filePath);
+                }
+            }
+    }
+
+    for (const auto options : actualFilterOptions) {
         const auto filter = new MSBuildFilter(options->include(), options->extensions(), itemGroup);
         filter->appendProperty(QStringLiteral("ParseFiles"), options->parseFiles());
         filter->appendProperty(QStringLiteral("SourceControlFiles"), options->sourceControlFiles());
     }
 
-    Internal::Set<QString> allFiles;
-    const auto productDatas = product.data.values();
-    for (const auto &productData : productDatas) {
-        for (const auto &groupData : productData.groups())
-            if (groupData.isEnabled())
-                allFiles.unite(Internal::Set<QString>::fromList(groupData.allFilePaths()));
-    }
 
-    MSBuildItemGroup *headerFilesGroup = nullptr;
-    MSBuildItemGroup *sourceFilesGroup = nullptr;
-    MSBuildItemGroup *filesGroup = nullptr;
-
-    for (const auto &filePath : allFiles) {
-        MSBuildFileItem *fileItem = nullptr;
-
-        for (const MSBuildFilter *options : filterOptions) {
-            if (matchesFilter(options, filePath)) {
-                if (options->include() == QStringLiteral("Header Files")) {
-                    if (!headerFilesGroup)
-                        headerFilesGroup = new MSBuildItemGroup(this);
-                    fileItem = new MSBuildClInclude(headerFilesGroup);
-                } else if (options->include() == QStringLiteral("Source Files")) {
-                    if (!sourceFilesGroup)
-                        sourceFilesGroup = new MSBuildItemGroup(this);
-                    fileItem = new MSBuildClCompile(sourceFilesGroup);
-                }
-
-                if (fileItem) {
-                    fileItem->setFilterName(options->include());
-                    break;
-                }
-            }
-        }
-
-        if (!fileItem) {
-            if (!filesGroup)
-                filesGroup = new MSBuildItemGroup(this);
-            fileItem = new MSBuildNone(filesGroup);
-        }
-        fileItem->setFilePath(filePath);
-    }
-
-    qDeleteAll(filterOptions);
+    qDeleteAll(defaultFilterOptions);
+    qDeleteAll(customFilterOptions);
 }
 
 } // namespace qbs
